@@ -10,9 +10,9 @@ class GongTenPlugin(Star):
     """QQ 群高危监控禁言插件
 
     功能：
-    - /监控 @用户  —— 加入高危监控名单（仅管理员）
-    - /监控列表     —— 查看当前群监控名单
-    - /解除监控 @用户  —— 移出高危监控名单（仅管理员）
+    - /禁言监控 @用户  —— 加入高危监控名单（仅管理员）
+    - /禁言监控列表     —— 查看当前群监控名单
+    - /解除禁言 @用户  —— 移出高危监控名单（仅管理员）
     - 被监控用户发言时自动禁言并阻断 LLM 响应
     """
 
@@ -134,18 +134,18 @@ class GongTenPlugin(Star):
 
     # ── 指令：/高危监控 @用户 ─────────────────────────────────────
 
-    @filter.command("监控")
+    @filter.command("禁言监控")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_add_monitor(self, event: AstrMessageEvent):
-        """添加群成员到高危监控名单 —— 用法: /监控 @用户"""
+        """添加群成员到高危监控名单 —— 用法: /禁言监控 @用户"""
         # 先检查发送者自身是否被监控
         if await self._try_mute_monitored_sender(event):
             return
 
         target_qq = self._extract_at_qq(event)
         if not target_qq:
-            yield event.plain_result("⚠️ 请 @ 要监控的用户，例如：/监控 @用户")
+            yield event.plain_result("⚠️ 请 @ 要监控的用户，例如：/禁言监控 @用户")
             return
 
         group_id = event.message_obj.group_id
@@ -180,7 +180,7 @@ class GongTenPlugin(Star):
 
     # ── 指令：/高危监控列表 ───────────────────────────────────────
 
-    @filter.command("监控列表")
+    @filter.command("禁言监控列表")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def cmd_list_monitor(self, event: AstrMessageEvent):
         """查看当前群的高危监控名单"""
@@ -205,18 +205,18 @@ class GongTenPlugin(Star):
 
     # ── 指令：/高危解除 @用户 ────────────────────────────────────
 
-    @filter.command("解除监控")
+    @filter.command("解除禁言")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_remove_monitor(self, event: AstrMessageEvent):
-        """从高危监控名单中移除群成员 —— 用法: /解除监控 @用户"""
+        """从高危监控名单中移除群成员 —— 用法: /解除禁言 @用户"""
         # 先检查发送者自身是否被监控
         if await self._try_mute_monitored_sender(event):
             return
 
         target_qq = self._extract_at_qq(event)
         if not target_qq:
-            yield event.plain_result("⚠️ 请 @ 要解除监控的用户，例如：/解除监控 @用户")
+            yield event.plain_result("⚠️ 请 @ 要解除监控的用户，例如：/解除禁言 @用户")
             return
 
         group_id = event.message_obj.group_id
