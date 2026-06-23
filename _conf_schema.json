@@ -1,0 +1,14 @@
+{
+  "mute_duration": {
+    "description": "禁言时长（秒）",
+    "type": "int",
+    "hint": "被监控用户发言后禁言的秒数，默认 120 秒",
+    "default": 120
+  },
+  "mute_warning": {
+    "description": "禁言警告语",
+    "type": "string",
+    "hint": "对被监控用户发送的警告消息",
+    "default": "你已在高危监控名单，无法发送信息"
+  }
+}
