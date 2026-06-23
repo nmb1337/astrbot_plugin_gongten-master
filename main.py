@@ -133,8 +133,7 @@ class GongTenPlugin(Star):
 
         mute_sec = self.config.get("mute_duration", 120)
         yield event.plain_result(
-            f"✅ 已将 {nickname}({target_qq}) 加入高危监控名单\n"
-            f"📌 禁言时长: {mute_sec} 秒"
+            f"✅ 已将 {nickname}({target_qq}) 加入高危监控名单"
         )
 
     # ── 指令：/高危监控列表 ───────────────────────────────────────
