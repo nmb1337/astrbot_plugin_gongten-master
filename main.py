@@ -95,43 +95,6 @@ class GongTenPlugin(Star):
             logger.warning(f"获取用户 {user_id} 信息失败: {e}")
         return user_id
 
-    # ── 发送者监控检测（供指令 handler 和 LLM 钩子共用） ────────────
-
-    async def _try_mute_monitored_sender(self, event: AstrMessageEvent) -> bool:
-        """检查发送者是否处于监控名单中，若是则禁言+警告+阻断。
-
-        调用方应在取得返回值后立即 return，不再执行后续逻辑。
-
-        Returns:
-            True: 发送者被监控并已处理（调用方应停止后续处理）
-            False: 发送者未被监控，可继续正常流程
-        """
-        sender_id = event.get_sender_id()
-        self_id = event.message_obj.self_id
-
-        # 忽略机器人自己的消息
-        if sender_id == self_id:
-            return False
-
-        group_id = event.message_obj.group_id
-        if not group_id:
-            return False
-
-        data = await self._get_monitor_data()
-        if group_id not in data:
-            return False
-        if sender_id not in data[group_id].get("users", {}):
-            return False
-
-        # ── 命中监控名单：禁言 + 警告 + 阻断 ──
-        mute_duration = self.config.get("mute_duration", 120)
-        mute_warning = self.config.get("mute_warning", "你已在高危监控名单，无法发送信息")
-
-        await self._mute_user(event, group_id, sender_id, mute_duration)
-        await event.send(event.plain_result(mute_warning))
-        event.stop_event()
-        return True
-
     # ── 指令：/高危监控 @用户 ─────────────────────────────────────
 
     @filter.command("高危监控")
@@ -139,10 +102,6 @@ class GongTenPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_add_monitor(self, event: AstrMessageEvent):
         """添加群成员到高危监控名单 —— 用法: /高危监控 @用户"""
-        # 先检查发送者自身是否被监控
-        if await self._try_mute_monitored_sender(event):
-            return
-
         target_qq = self._extract_at_qq(event)
         if not target_qq:
             yield event.plain_result("⚠️ 请 @ 要监控的用户，例如：/高危监控 @用户")
@@ -210,10 +169,6 @@ class GongTenPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_remove_monitor(self, event: AstrMessageEvent):
         """从高危监控名单中移除群成员 —— 用法: /脱离监控 @用户"""
-        # 先检查发送者自身是否被监控
-        if await self._try_mute_monitored_sender(event):
-            return
-
         target_qq = self._extract_at_qq(event)
         if not target_qq:
             yield event.plain_result("⚠️ 请 @ 要解除监控的用户，例如：/脱离监控 @用户")
@@ -257,13 +212,14 @@ class GongTenPlugin(Star):
         if sender_id not in data[group_id].get("users", {}):
             return
 
-        # ── 命中监控名单：禁言 + 警告 + 阻断 ──
+        # ── 命中监控名单：先阻断 → 禁言 → 警告 ──
+        event.stop_event()
+
         mute_duration = self.config.get("mute_duration", 120)
         mute_warning = self.config.get("mute_warning", "你已在高危监控名单，无法发送信息")
 
         await self._mute_user(event, group_id, sender_id, mute_duration)
         yield event.plain_result(mute_warning)
-        event.stop_event()
 
     # ── 辅助方法 ───────────────────────────────────────────────────
 
