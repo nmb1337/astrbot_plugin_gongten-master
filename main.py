@@ -266,28 +266,43 @@ class GongTenPlugin(Star):
 
         nickname = await self._get_user_display_name(event, group_id, target_qq)
 
-        # 先立即发送提示（用 event.send 确保消息立刻发出，不用 yield 避免被框架缓存）
-        await event.send(event.plain_result(f"🚫 正在将 {nickname}({target_qq}) 移出群聊并加入黑名单..."))
+        # 趁 event 还有效，先拿到协议端 client
+        client = await self._get_client(event)
+        if not client:
+            yield event.plain_result("❌ 无法获取协议端，踢人失败")
+            return
 
-        # 延迟 4 秒，确保目标看到上条消息
-        await asyncio.sleep(4)
+        # 用 asyncio.create_task 把踢人丢到后台延迟执行
+        # 这样 yield 的消息能立刻发到群里，目标看得到
+        asyncio.create_task(
+            self._bg_kick(client, group_id, target_qq, nickname)
+        )
 
-        # 执行踢出 + 黑名单
-        ok = await self._kick_user(event, group_id, target_qq)
+        # 立刻发出假消息（框架收到 yield 后马上发送）
+        yield event.plain_result(f"🚫 {nickname}({target_qq}) 已被拉入联盟黑名单")
 
-        # 同步清理监控名单
-        data = await self._get_monitor_data()
-        if group_id in data and target_qq in data[group_id].get("users", {}):
-            del data[group_id]["users"][target_qq]
-            if not data[group_id]["users"]:
-                del data[group_id]
-            await self._save_monitor_data(data)
+    async def _bg_kick(self, client, group_id: str, target_qq: str, nickname: str):
+        """后台任务：延迟 4 秒后执行踢人 + 黑名单 + 清理监控名单。"""
+        try:
+            await asyncio.sleep(4)
 
-        # 发送结果
-        if ok:
-            await event.send(event.plain_result(f"✅ {nickname}({target_qq}) 已被移出群聊并加入黑名单"))
-        else:
-            await event.send(event.plain_result(f"❌ 踢出 {nickname}({target_qq}) 失败，请检查机器人权限"))
+            ret = await client.api.call_action(
+                "set_group_kick",
+                group_id=int(group_id),
+                user_id=int(target_qq),
+                reject_add_request=True,
+            )
+            logger.info(f"后台踢出 {target_qq} 从群 {group_id}，结果: {ret}")
+
+            # 同步清理监控名单
+            data = await self._get_monitor_data()
+            if group_id in data and target_qq in data[group_id].get("users", {}):
+                del data[group_id]["users"][target_qq]
+                if not data[group_id]["users"]:
+                    del data[group_id]
+                await self._save_monitor_data(data)
+        except Exception as e:
+            logger.error(f"后台踢人失败: {e}")
 
     # ═══════════════════════════════════════════════════════════════
     # 群消息监听：检测被监控用户发言
