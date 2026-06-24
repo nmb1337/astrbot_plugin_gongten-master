@@ -24,9 +24,10 @@ class GongTenPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        # ── 消息去重：防止同一条消息被重复处理 ──
+        # ── 消息去重 + 近期禁言追踪（双重防重复） ──
         self._processed_msgs: dict[str, float] = {}
-        self._dedup_ttl = 10  # 记录保留秒数
+        self._dedup_ttl = 10
+        self._recent_mutes: dict[str, float] = {}  # key:"group:user" -> timestamp
 
     # ═══════════════════════════════════════════════════════════════
     # 消息去重
@@ -236,7 +237,11 @@ class GongTenPlugin(Star):
             del data[group_id]
 
         await self._save_monitor_data(data)
-        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 移出高危监控名单")
+
+        # 自动解除禁言（duration=0）
+        await self._mute_user(event, group_id, target_qq, 0)
+
+        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 移出高危监控名单，并已解除禁言")
 
     # ═══════════════════════════════════════════════════════════════
     # 指令：/fin联盟 @用户 / QQ号 （踢人 + 黑名单 + 延迟）
@@ -261,11 +266,11 @@ class GongTenPlugin(Star):
 
         nickname = await self._get_user_display_name(event, group_id, target_qq)
 
-        # 先发提示消息
-        yield event.plain_result(f"🚫 正在将 {nickname}({target_qq}) 移出群聊并加入黑名单...")
+        # 先立即发送提示（用 event.send 确保消息立刻发出，不用 yield 避免被框架缓存）
+        await event.send(event.plain_result(f"🚫 正在将 {nickname}({target_qq}) 移出群聊并加入黑名单..."))
 
-        # 延迟 3.5 秒，让对方看到消息
-        await asyncio.sleep(3.5)
+        # 延迟 4 秒，确保目标看到上条消息
+        await asyncio.sleep(4)
 
         # 执行踢出 + 黑名单
         ok = await self._kick_user(event, group_id, target_qq)
@@ -278,10 +283,11 @@ class GongTenPlugin(Star):
                 del data[group_id]
             await self._save_monitor_data(data)
 
+        # 发送结果
         if ok:
-            yield event.plain_result(f"✅ {nickname}({target_qq}) 已被移出群聊并加入黑名单")
+            await event.send(event.plain_result(f"✅ {nickname}({target_qq}) 已被移出群聊并加入黑名单"))
         else:
-            yield event.plain_result(f"❌ 踢出 {nickname}({target_qq}) 失败，请检查机器人权限")
+            await event.send(event.plain_result(f"❌ 踢出 {nickname}({target_qq}) 失败，请检查机器人权限"))
 
     # ═══════════════════════════════════════════════════════════════
     # 群消息监听：检测被监控用户发言
@@ -312,6 +318,18 @@ class GongTenPlugin(Star):
             return
         if sender_id not in data[group_id].get("users", {}):
             return
+
+        # ── 近期禁言去重：同一用户 8 秒内不重复处理 ──
+        mute_key = f"{group_id}:{sender_id}"
+        now = time.time()
+        # 清理过期
+        expired_mutes = [k for k, v in self._recent_mutes.items() if now - v > 30]
+        for k in expired_mutes:
+            del self._recent_mutes[k]
+        if mute_key in self._recent_mutes and now - self._recent_mutes[mute_key] < 8:
+            logger.info(f"防重复禁言拦截: {mute_key}")
+            return
+        self._recent_mutes[mute_key] = now
 
         # ── 命中监控名单：先阻断 → 禁言 → 警告 ──
         event.stop_event()
