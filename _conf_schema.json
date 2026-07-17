@@ -5,6 +5,12 @@
     "hint": "被监控用户发言后禁言的秒数，默认 120 秒",
     "default": 120
   },
+  "alliance_mute_duration": {
+    "description": "联盟监控默认禁言时长（秒）",
+    "type": "int",
+    "hint": "使用 /联盟监控 时未指定秒数的默认禁言时长，范围 1-2592000 秒",
+    "default": 120
+  },
   "mute_warning": {
     "description": "禁言警告语",
     "type": "string",
