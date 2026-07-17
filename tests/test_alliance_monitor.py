@@ -101,47 +101,7 @@ class AllianceMonitorTests(unittest.TestCase):
         cls.module = load_main_module()
 
     def setUp(self) -> None:
-        self.plugin = self.module.GongTenPlugin(object(), {"alliance_mute_duration": 120})
-
-    def test_extracts_optional_duration_without_confusing_target_qq(self) -> None:
-        event = types.SimpleNamespace(
-            message_str="/联盟监控 123456789 600", get_messages=lambda: []
-        )
-
-        duration = self.plugin._extract_duration(event, "123456789")
-
-        self.assertEqual(600, duration)
-
-    def test_extracts_duration_equal_to_direct_target_qq(self) -> None:
-        event = types.SimpleNamespace(
-            message_str="/联盟监控 123456 123456", get_messages=lambda: []
-        )
-
-        duration = self.plugin._extract_duration(event, "123456")
-
-        self.assertEqual(123456, duration)
-
-    def test_extracts_duration_after_at_target(self) -> None:
-        event = types.SimpleNamespace(
-            message_str="/联盟监控 @目标用户 600",
-            get_messages=lambda: [self.module.At("123456789")],
-        )
-
-        target_qq = self.plugin._extract_target_qq(event)
-        duration = self.plugin._extract_duration(event, target_qq)
-
-        self.assertEqual("123456789", target_qq)
-        self.assertEqual(600, duration)
-
-    def test_uses_default_duration_when_command_has_no_duration(self) -> None:
-        event = types.SimpleNamespace(
-            message_str="/联盟监控 123456789", get_messages=lambda: []
-        )
-
-        duration = self.plugin._extract_duration(event, "123456789")
-
-        self.assertIsNone(duration)
-        self.assertEqual(120, self.plugin._get_alliance_mute_duration())
+        self.plugin = self.module.GongTenPlugin(object(), {"mute_duration": 120})
 
     def test_alliance_monitored_message_is_recalled_then_muted(self) -> None:
         calls = []
@@ -155,13 +115,13 @@ class AllianceMonitorTests(unittest.TestCase):
 
         self.plugin._recall_message = recall
         self.plugin._mute_user = mute
-        self.plugin.kv_data["alliance_monitor_data"] = {
+        self.plugin.kv_data["monitor_data"] = {
             "10001": {
                 "users": {
                     "20002": {
                         "qq": "20002",
                         "nickname": "目标用户",
-                        "mute_duration": 600,
+                        "recall": True,
                     }
                 }
             }
@@ -172,24 +132,25 @@ class AllianceMonitorTests(unittest.TestCase):
             ),
             get_sender_id=lambda: "20002",
             stop_event=lambda: calls.append(("stop_event",)),
+            plain_result=lambda text: text,
         )
 
         async def consume_listener():
-            async for _result in self.plugin.on_group_message(event):
-                self.fail("联盟监控不应生成警告消息")
+            return [result async for result in self.plugin.on_group_message(event)]
 
-        asyncio.run(consume_listener())
+        results = asyncio.run(consume_listener())
 
         self.assertEqual(
             [
                 ("stop_event",),
                 ("delete_msg", "30003"),
-                ("set_group_ban", "10001", "20002", 600),
+                ("set_group_ban", "10001", "20002", 120),
             ],
             calls,
         )
+        self.assertEqual(["你已在高危监控名单，无法发送信息"], results)
 
-    def test_alliance_monitor_command_persists_requested_duration(self) -> None:
+    def test_alliance_monitor_command_uses_shared_monitor_list(self) -> None:
         async def group_name(_event, _group_id):
             return "测试群"
 
@@ -199,7 +160,7 @@ class AllianceMonitorTests(unittest.TestCase):
         self.plugin._get_group_name = group_name
         self.plugin._get_user_display_name = display_name
         event = types.SimpleNamespace(
-            message_str="/联盟监控 123456789 600",
+            message_str="/联盟监控 123456789",
             message_obj=types.SimpleNamespace(group_id="10001", self_id="40004"),
             get_messages=lambda: [],
             plain_result=lambda text: text,
@@ -210,9 +171,116 @@ class AllianceMonitorTests(unittest.TestCase):
 
         results = asyncio.run(consume_command())
 
-        user = self.plugin.kv_data["alliance_monitor_data"]["10001"]["users"]["123456789"]
-        self.assertEqual(600, user["mute_duration"])
-        self.assertIn("禁言 600 秒", results[0])
+        user = self.plugin.kv_data["monitor_data"]["10001"]["users"]["123456789"]
+        self.assertTrue(user["recall"])
+        self.assertIn("按当前禁言设置处理", results[0])
+
+    def test_high_risk_command_disables_recall_for_shared_entry(self) -> None:
+        async def group_name(_event, _group_id):
+            return "测试群"
+
+        async def display_name(_event, _group_id, _user_id):
+            return "目标用户"
+
+        self.plugin._get_group_name = group_name
+        self.plugin._get_user_display_name = display_name
+        self.plugin.kv_data["monitor_data"] = {
+            "10001": {
+                "group_name": "测试群",
+                "users": {"123456789": {"qq": "123456789", "recall": True}},
+            }
+        }
+        event = types.SimpleNamespace(
+            message_str="/高危监控 123456789",
+            message_obj=types.SimpleNamespace(group_id="10001", self_id="40004"),
+            get_messages=lambda: [],
+            plain_result=lambda text: text,
+        )
+
+        async def consume_command():
+            return [result async for result in self.plugin.cmd_add_monitor(event)]
+
+        results = asyncio.run(consume_command())
+
+        user = self.plugin.kv_data["monitor_data"]["10001"]["users"]["123456789"]
+        self.assertFalse(user["recall"])
+        self.assertIn("不撤回消息", results[0])
+
+    def test_high_risk_monitored_message_does_not_recall(self) -> None:
+        calls = []
+
+        async def recall(_event, _message_id):
+            calls.append("delete_msg")
+            return True
+
+        async def mute(_event, group_id, user_id, duration):
+            calls.append(("set_group_ban", group_id, user_id, duration))
+
+        self.plugin._recall_message = recall
+        self.plugin._mute_user = mute
+        self.plugin.kv_data["monitor_data"] = {
+            "10001": {"users": {"20002": {"qq": "20002", "recall": False}}}
+        }
+        event = types.SimpleNamespace(
+            message_obj=types.SimpleNamespace(
+                message_id="30003", group_id="10001", self_id="40004"
+            ),
+            get_sender_id=lambda: "20002",
+            stop_event=lambda: calls.append(("stop_event",)),
+            plain_result=lambda text: text,
+        )
+
+        async def consume_listener():
+            return [result async for result in self.plugin.on_group_message(event)]
+
+        results = asyncio.run(consume_listener())
+
+        self.assertNotIn("delete_msg", calls)
+        self.assertEqual([("stop_event",), ("set_group_ban", "10001", "20002", 120)], calls)
+        self.assertEqual(["你已在高危监控名单，无法发送信息"], results)
+
+    def test_legacy_alliance_entries_migrate_to_shared_monitor_list(self) -> None:
+        self.plugin.kv_data["alliance_monitor_data"] = {
+            "10001": {
+                "group_name": "测试群",
+                "users": {"20002": {"qq": "20002", "nickname": "目标用户"}},
+            }
+        }
+
+        data = asyncio.run(self.plugin._get_monitor_data())
+
+        self.assertTrue(data["10001"]["users"]["20002"]["recall"])
+        self.assertEqual({}, self.plugin.kv_data["alliance_monitor_data"])
+
+    def test_remove_monitor_removes_alliance_entry_and_unmutes(self) -> None:
+        calls = []
+
+        async def mute(_event, group_id, user_id, duration):
+            calls.append((group_id, user_id, duration))
+
+        self.plugin._mute_user = mute
+        self.plugin.kv_data["monitor_data"] = {
+            "10001": {
+                "users": {
+                    "20002": {"qq": "20002", "nickname": "目标用户", "recall": True}
+                }
+            }
+        }
+        event = types.SimpleNamespace(
+            message_str="/脱离监控 20002",
+            message_obj=types.SimpleNamespace(group_id="10001"),
+            get_messages=lambda: [],
+            plain_result=lambda text: text,
+        )
+
+        async def consume_command():
+            return [result async for result in self.plugin.cmd_remove_monitor(event)]
+
+        results = asyncio.run(consume_command())
+
+        self.assertEqual({}, self.plugin.kv_data["monitor_data"])
+        self.assertEqual([("10001", "20002", 0)], calls)
+        self.assertIn("移出监控名单", results[0])
 
     def test_alliance_monitor_actions_use_onebot_api(self) -> None:
         calls = []

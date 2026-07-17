@@ -9,13 +9,13 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.message_components import At
 
 
-@register("astrbot_plugin_gongten", "YourName", "QQ群高危与联盟监控禁言插件", "1.3.0")
+@register("astrbot_plugin_gongten", "YourName", "QQ群高危与联盟监控禁言插件", "1.3.1")
 class GongTenPlugin(Star):
     """QQ 群高危监控禁言插件
 
     功能：
     - /高危监控 @用户  —— 加入高危监控名单（仅管理员）
-    - /联盟监控 @用户 [禁言秒数] —— 加入联盟监控名单，发言即撤回并禁言（仅管理员）
+    - /联盟监控 @用户  —— 加入监控名单并启用撤回（仅管理员）
     - /高危列表       —— 查看当前群监控名单
     - /脱离监控 @用户/QQ号 —— 移出高危监控名单（仅管理员，支持QQ号）
     - /fin联盟 @用户/QQ号  —— 踢出群聊并加入黑名单（仅管理员，延迟3.5秒）
@@ -52,20 +52,34 @@ class GongTenPlugin(Star):
     # ═══════════════════════════════════════════════════════════════
 
     async def _get_monitor_data(self) -> dict:
-        """获取全部监控数据。"""
-        return await self.get_kv_data("monitor_data", {})
+        """获取统一监控名单，并迁移旧版独立联盟监控数据。"""
+        data = await self.get_kv_data("monitor_data", {})
+        legacy_data = await self.get_kv_data("alliance_monitor_data", {})
+        if not legacy_data:
+            return data
+
+        for raw_group_id, legacy_group in legacy_data.items():
+            group_id = str(raw_group_id)
+            group = data.setdefault(
+                group_id,
+                {"group_name": legacy_group.get("group_name", group_id), "users": {}},
+            )
+            group.setdefault("users", {})
+            for raw_user_id, legacy_user in legacy_group.get("users", {}).items():
+                user_id = str(raw_user_id)
+                group["users"][user_id] = {
+                    "qq": user_id,
+                    "nickname": legacy_user.get("nickname", user_id),
+                    "recall": True,
+                }
+
+        await self.put_kv_data("monitor_data", data)
+        await self.put_kv_data("alliance_monitor_data", {})
+        return data
 
     async def _save_monitor_data(self, data: dict):
         """保存监控数据。"""
         await self.put_kv_data("monitor_data", data)
-
-    async def _get_alliance_monitor_data(self) -> dict:
-        """获取全部联盟监控数据。"""
-        return await self.get_kv_data("alliance_monitor_data", {})
-
-    async def _save_alliance_monitor_data(self, data: dict):
-        """保存联盟监控数据。"""
-        await self.put_kv_data("alliance_monitor_data", data)
 
     # ═══════════════════════════════════════════════════════════════
     # OneBot API 封装
@@ -194,30 +208,29 @@ class GongTenPlugin(Star):
         else:
             data[group_id]["group_name"] = await self._get_group_name(event, group_id)
 
-        if target_qq in data[group_id].get("users", {}):
-            nickname = data[group_id]["users"][target_qq].get("nickname", target_qq)
-            yield event.plain_result(f"⚠️ 用户 {nickname}({target_qq}) 已在监控名单中")
-            return
-
         nickname = await self._get_user_display_name(event, group_id, target_qq)
-        data[group_id]["users"][target_qq] = {"qq": target_qq, "nickname": nickname}
+        data[group_id]["users"][target_qq] = {
+            "qq": target_qq,
+            "nickname": nickname,
+            "recall": False,
+        }
         await self._save_monitor_data(data)
 
-        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 加入高危监控名单")
+        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 设为高危监控（不撤回消息）")
 
     # ═══════════════════════════════════════════════════════════════
-    # 指令：/联盟监控 @用户 [禁言秒数] / QQ号 [禁言秒数]
+    # 指令：/联盟监控 @用户 / QQ号
     # ═══════════════════════════════════════════════════════════════
 
     @filter.command("联盟监控")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_add_alliance_monitor(self, event: AstrMessageEvent):
-        """监控群成员：目标发言时立即撤回并按配置禁言。"""
+        """将群成员加入统一监控名单，并为其发言启用撤回。"""
         target_qq = self._extract_target_qq(event)
         if not target_qq:
             yield event.plain_result(
-                "⚠️ 请 @ 要监控的用户，或输入 QQ 号：/联盟监控 @用户 [禁言秒数]"
+                "⚠️ 请 @ 要监控的用户，或输入 QQ 号：/联盟监控 @用户"
             )
             return
 
@@ -227,14 +240,7 @@ class GongTenPlugin(Star):
             yield event.plain_result("⚠️ 不能监控机器人自身")
             return
 
-        duration = self._extract_duration(event, target_qq)
-        if duration is None:
-            duration = self._get_alliance_mute_duration()
-        if duration < 1 or duration > 2_592_000:
-            yield event.plain_result("⚠️ 禁言秒数必须在 1 到 2592000 之间")
-            return
-
-        data = await self._get_alliance_monitor_data()
+        data = await self._get_monitor_data()
         if group_id not in data:
             group_name = await self._get_group_name(event, group_id)
             data[group_id] = {"group_name": group_name, "users": {}}
@@ -245,58 +251,12 @@ class GongTenPlugin(Star):
         data[group_id]["users"][target_qq] = {
             "qq": target_qq,
             "nickname": nickname,
-            "mute_duration": duration,
+            "recall": True,
         }
-        await self._save_alliance_monitor_data(data)
+        await self._save_monitor_data(data)
         yield event.plain_result(
-            f"✅ 已将 {nickname}({target_qq}) 加入联盟监控：发言将立即撤回并禁言 {duration} 秒"
+            f"✅ 已将 {nickname}({target_qq}) 加入联盟监控：发言将立即撤回并按当前禁言设置处理"
         )
-
-    @filter.command("联盟列表")
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
-    async def cmd_list_alliance_monitor(self, event: AstrMessageEvent):
-        """查看当前群的联盟监控名单和禁言秒数。"""
-        group_id = str(event.message_obj.group_id)
-        data = await self._get_alliance_monitor_data()
-        if group_id not in data or not data[group_id].get("users"):
-            yield event.plain_result("📭 当前群没有联盟监控用户")
-            return
-
-        group_name = data[group_id].get("group_name", group_id)
-        lines = [f"📋 联盟监控名单 —— {group_name}", "─" * 28]
-        for index, (user_id, user_info) in enumerate(data[group_id]["users"].items(), 1):
-            nickname = user_info.get("nickname", user_id)
-            duration = user_info.get("mute_duration", self._get_alliance_mute_duration())
-            lines.append(f"  {index}. {nickname} (QQ: {user_id}) 禁言 {duration} 秒")
-        lines.append("─" * 28)
-        lines.append(f"共 {len(data[group_id]['users'])} 人处于联盟监控中")
-        yield event.plain_result("\n".join(lines))
-
-    @filter.command("解除联盟监控")
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def cmd_remove_alliance_monitor(self, event: AstrMessageEvent):
-        """从联盟监控名单中移除群成员。"""
-        target_qq = self._extract_target_qq(event)
-        if not target_qq:
-            yield event.plain_result(
-                "⚠️ 请 @ 要解除的用户，或输入 QQ 号：/解除联盟监控 @用户"
-            )
-            return
-
-        group_id = str(event.message_obj.group_id)
-        data = await self._get_alliance_monitor_data()
-        if group_id not in data or target_qq not in data[group_id].get("users", {}):
-            yield event.plain_result(f"⚠️ 用户 {target_qq} 不在联盟监控名单中")
-            return
-
-        user_info = data[group_id]["users"].pop(target_qq)
-        if not data[group_id]["users"]:
-            del data[group_id]
-        await self._save_alliance_monitor_data(data)
-        await self._mute_user(event, group_id, target_qq, 0)
-        nickname = user_info.get("nickname", target_qq)
-        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 移出联盟监控名单，并已解除禁言")
 
     # ═══════════════════════════════════════════════════════════════
     # 指令：/高危列表
@@ -319,7 +279,8 @@ class GongTenPlugin(Star):
         lines = [f"📋 高危监控名单 —— {group_name}", "─" * 28]
         for i, (uid, uinfo) in enumerate(users.items(), 1):
             nickname = uinfo.get("nickname", uid)
-            lines.append(f"  {i}. {nickname}  (QQ: {uid})")
+            mode = "联盟监控（撤回）" if uinfo.get("recall") else "高危监控"
+            lines.append(f"  {i}. {nickname}  (QQ: {uid})  {mode}")
         lines.append("─" * 28)
         lines.append(f"共 {len(users)} 人处于监控中")
 
@@ -333,7 +294,7 @@ class GongTenPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_remove_monitor(self, event: AstrMessageEvent):
-        """从高危监控名单中移除群成员 —— 用法: /脱离监控 @用户 或 /脱离监控 QQ号"""
+        """从统一监控名单中移除群成员，并解除禁言。"""
         target_qq = self._extract_target_qq(event)
         if not target_qq:
             yield event.plain_result("⚠️ 请 @ 要解除的用户，或输入QQ号：/脱离监控 @用户")
@@ -357,7 +318,7 @@ class GongTenPlugin(Star):
         # 自动解除禁言（duration=0）
         await self._mute_user(event, group_id, target_qq, 0)
 
-        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 移出高危监控名单，并已解除禁言")
+        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 移出监控名单，并已解除禁言")
 
     # ═══════════════════════════════════════════════════════════════
     # 指令：/fin联盟 @用户 / QQ号 （踢人 + 黑名单 + 延迟）
@@ -444,19 +405,20 @@ class GongTenPlugin(Star):
         if not group_id:
             return
 
-        alliance_data = await self._get_alliance_monitor_data()
-        alliance_user = alliance_data.get(group_id, {}).get("users", {}).get(sender_id)
-        if alliance_user:
-            event.stop_event()
-            duration = alliance_user.get("mute_duration", self._get_alliance_mute_duration())
-            await self._recall_message(event, msg_id)
-            await self._mute_user(event, group_id, sender_id, duration)
-            return
-
         data = await self._get_monitor_data()
         if group_id not in data:
             return
-        if sender_id not in data[group_id].get("users", {}):
+        user = data[group_id].get("users", {}).get(sender_id)
+        if not user:
+            return
+
+        if user.get("recall"):
+            event.stop_event()
+            await self._recall_message(event, msg_id)
+            mute_duration = self.config.get("mute_duration", 120)
+            await self._mute_user(event, group_id, sender_id, mute_duration)
+            mute_warning = self.config.get("mute_warning", "你已在高危监控名单，无法发送信息")
+            yield event.plain_result(mute_warning)
             return
 
         # ── 近期禁言去重：同一用户 8 秒内不重复处理 ──
@@ -508,24 +470,6 @@ class GongTenPlugin(Star):
         if qq:
             return qq
         return GongTenPlugin._extract_qq_from_text(event)
-
-    def _get_alliance_mute_duration(self) -> int:
-        """Return a valid default alliance-monitor mute duration in seconds."""
-        duration = self.config.get("alliance_mute_duration", 120)
-        if isinstance(duration, bool) or not isinstance(duration, int):
-            return 120
-        return duration
-
-    @staticmethod
-    def _extract_duration(event: AstrMessageEvent, target_qq: str) -> int | None:
-        """Extract the optional duration after an @ target or direct QQ target."""
-        numbers = re.findall(r"\b([1-9]\d*)\b", event.message_str)
-        if GongTenPlugin._extract_at_qq(event):
-            return int(numbers[-1]) if numbers else None
-        for index, value in enumerate(numbers):
-            if value == target_qq and index + 1 < len(numbers):
-                return int(numbers[index + 1])
-        return None
 
     async def terminate(self):
         """插件卸载/停用时的清理工作。"""
