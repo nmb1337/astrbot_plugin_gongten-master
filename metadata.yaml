@@ -2,7 +2,7 @@ name: astrbot_plugin_gongten # 插件唯一识别名
 display_name: 高危与联盟监控禁言 # 用于展示的名字
 desc: QQ群高危与联盟监控禁言插件，可监控指定用户并在其发言时自动撤回、禁言。 # 插件简短描述
 short_desc: 监控群成员发言并自动撤回禁言
-version: v1.3.1 # 插件版本号
+version: v1.3.2 # 插件版本号
 author: YourName # 作者
 repo: https://github.com/nmb1337/astrbot_plugin_gongten-master # 插件的仓库地址
 support_platforms:

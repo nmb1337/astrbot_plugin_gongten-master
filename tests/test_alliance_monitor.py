@@ -173,7 +173,7 @@ class AllianceMonitorTests(unittest.TestCase):
 
         user = self.plugin.kv_data["monitor_data"]["10001"]["users"]["123456789"]
         self.assertTrue(user["recall"])
-        self.assertIn("按当前禁言设置处理", results[0])
+        self.assertEqual("✅ 已将 目标用户(123456789) 设为联盟监控", results[0])
 
     def test_high_risk_command_disables_recall_for_shared_entry(self) -> None:
         async def group_name(_event, _group_id):
@@ -204,7 +204,7 @@ class AllianceMonitorTests(unittest.TestCase):
 
         user = self.plugin.kv_data["monitor_data"]["10001"]["users"]["123456789"]
         self.assertFalse(user["recall"])
-        self.assertIn("不撤回消息", results[0])
+        self.assertEqual("✅ 已将 目标用户(123456789) 设为高危监控", results[0])
 
     def test_high_risk_monitored_message_does_not_recall(self) -> None:
         calls = []

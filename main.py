@@ -9,7 +9,7 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.message_components import At
 
 
-@register("astrbot_plugin_gongten", "YourName", "QQ群高危与联盟监控禁言插件", "1.3.1")
+@register("astrbot_plugin_gongten", "YourName", "QQ群高危与联盟监控禁言插件", "1.3.2")
 class GongTenPlugin(Star):
     """QQ 群高危监控禁言插件
 
@@ -216,7 +216,7 @@ class GongTenPlugin(Star):
         }
         await self._save_monitor_data(data)
 
-        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 设为高危监控（不撤回消息）")
+        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 设为高危监控")
 
     # ═══════════════════════════════════════════════════════════════
     # 指令：/联盟监控 @用户 / QQ号
@@ -254,9 +254,7 @@ class GongTenPlugin(Star):
             "recall": True,
         }
         await self._save_monitor_data(data)
-        yield event.plain_result(
-            f"✅ 已将 {nickname}({target_qq}) 加入联盟监控：发言将立即撤回并按当前禁言设置处理"
-        )
+        yield event.plain_result(f"✅ 已将 {nickname}({target_qq}) 设为联盟监控")
 
     # ═══════════════════════════════════════════════════════════════
     # 指令：/高危列表
